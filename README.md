@@ -34,7 +34,15 @@ users.select().where(email.eq("john.smith@example.com")).asSQL();
 
 
 ## Installation
-Hope to have it on dub.
+Dub Manually:
+```manual
+dub add fluentsqlite
+```
+Dub SDL:
 ```sdl
-dependency "taskdesigns:sqlite" version="~>0.1.0"
+dependency "fluentsqlite" version="~>0.1.0"
+```
+Dub JSON:
+```json
+"fluentsqlite": "~>0.1.0"
 ```
