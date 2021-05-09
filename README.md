@@ -36,5 +36,5 @@ users.select().where(email.eq("john.smith@example.com")).asSQL();
 ## Installation
 Hope to have it on dub.
 ```sdl
-dependency "taskdesigns:sqlite" version="~>0.0.1"
+dependency "taskdesigns:sqlite" version="~>0.1.0"
 ```
