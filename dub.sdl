@@ -1,4 +1,5 @@
 name "fluentsqlite"
+targetType "library"
 description "A wrapper for SQLite to use a fluent interface for creating SQL queries."
 authors "Salman T. Khan"
 license "MIT"
