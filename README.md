@@ -1,5 +1,5 @@
 # FluentSQLite
- An implementation of SQLite Query Builder in D Lang, originally ported from fluks.
+ An implementation of SQLite Query Builder in D Lang, originally ported from [fluks](https://github.com/segabond/fluks) in Kotlin.
 
 ## Usage
 ```D
