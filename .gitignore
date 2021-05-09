@@ -22,3 +22,11 @@ docs/
 
 # Code coverage
 *.lst
+
+/fluentsqlite
+fluentsqlite.so
+fluentsqlite.dylib
+fluentsqlite.dll
+fluentsqlite.a
+fluentsqlite.lib
+fluentsqlite-test-*
