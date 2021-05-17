@@ -27,15 +27,24 @@ string quotedIdentifier(string value) {
     return `"` ~ ret ~ `"`;
 }
 
+//SQL Expression Interface
 interface Expression {
+    //Expression rendered as a string
     string render();
 }
 
+/++
+ Scalar Expression
+++/
 class ScalarExpression(T) : Expression {
     private T value;
     this (T _value) {
         value = _value;
     }
+
+    /++
+        Overriden render from Expression interface
+    ++/
     override string render() {
         import std.conv;
         if (is(T == int)) {
@@ -122,6 +131,24 @@ abstract class Predicate {
     }
 }
 
+abstract class Sort {
+    abstract string render();
+}
+
+class SortAscending: Sort {
+    Expression expression;
+    override string render(){
+        return `ORDER BY `~ expression.render() ~ `ASC`;
+    }
+}
+
+class SortDescending: Sort {
+    Expression expression;
+    override string render(){
+        return `ORDER BY `~ expression.render() ~ `DESC`;
+    }
+}
+
 class EqualityPredicate : Predicate {
     Expression left;
     Expression right;
@@ -176,10 +203,11 @@ class DisjunctionPredicate : Predicate {
 
 class Column(T): Expression {
     string name;
-    bool isNullable;
+    bool is_nullable;
     ColumnType type;
-    this(string _name) {
+    this(string _name, bool _is_nullable = true) {
         name = _name;
+        is_nullable = _is_nullable;
         if (is(T == string)) {
             type = ColumnType.TEXT;
         } else if (is(T == double) || is(T == float)) {
@@ -225,9 +253,9 @@ class Setters {
     Setter[] setters;
 
     Setter opIndexAssign(T)(T value, Column!T field) {
-        foreach(i, setter; setters) {
+        foreach (i, setter; setters) {
             if (setter.field.render() == field.render()) {
-                auto replacementSetter = new Setter(field, new ScalarExpression!T( value));
+                auto replacementSetter = new Setter( field, new ScalarExpression!T( value));
                 setters[i] = replacementSetter;
                 return replacementSetter;
             }
@@ -254,6 +282,7 @@ class SelectStatement: Statement {
     Expression[] expressions;
     Expression table = null;
     Predicate predicate = null;
+    Sort[] orders;
 
     this(Expression _expression) {
         expressions ~= _expression;
@@ -268,8 +297,13 @@ class SelectStatement: Statement {
         return this;
     }
 
-    SelectStatement where(Predicate predicate) {
-        this.predicate = predicate;
+    SelectStatement where(Predicate _predicate) {
+        predicate = _predicate;
+        return this;
+    }
+
+    SelectStatement order_by(Sort _sort) {
+        this.orders ~= _sort;
         return this;
     }
 
@@ -284,7 +318,13 @@ class SelectStatement: Statement {
         auto from = "";
         if (table)
             from = ` FROM `~ table.render() ~ ` `;
-        return `SELECT ` ~ fields ~ from ~ where;
+        auto order = "";
+        if (orders.length > 0) {
+            foreach (expression; orders)
+                order ~= expression.render() ~ ",";
+            order = ` ORDER BY ` ~ order;
+        }
+        return `SELECT ` ~ fields ~ from ~ where ~ order;
     }
 }
 
@@ -301,7 +341,19 @@ class CreateStatement: Statement {
             columns ~= column.render() ~ `,`;
         }
         columns = columns[0..$ - 1];
-        return `CREATE TABLE ` ~ builder.table.render() ~ ` (` ~ columns ~`)`;
+        return `CREATE TABLE IF NOT EXISTS ` ~ builder.table.render() ~ ` (` ~ columns ~`);`;
+    }
+}
+
+class DropStatement: Statement {
+    Expression table = null;
+
+    this(Expression _table) {
+        table = _table;
+    }
+
+    override string asSQL() {
+        return `DROP TABLE IF EXISTS ` ~ table.render() ~ `;`;
     }
 }
 
@@ -313,6 +365,7 @@ class InsertStatement: Statement {
         setters = _setters;
     }
     override string asSQL() {
+        import std.array: replace;
         auto fields = "";
         foreach (setter; setters) {
             fields ~= setter.field.render() ~ ",";
@@ -321,16 +374,70 @@ class InsertStatement: Statement {
             fields = fields[0..$ - 1];
             auto values = "";
             foreach (setter; setters) {
-                values ~= setter.value.render() ~ ",";
+                //Adding a check for single quotes
+                if (setter.value.render().length > 1) {
+                    import std.string: indexOf;
+                    if (setter.value.render()[1..$ - 1].indexOf(`'`) != -1) {
+                        auto editedSetter = setter.value.render()[1..$ - 1].replace( `'`, `''`);
+                        values ~= `'` ~ editedSetter ~ "',";
+                    } else {
+                        values ~= `'` ~ setter.value.render() ~ "',";
+                    }
+                } else {
+                    values ~= `'` ~ setter.value.render() ~ "',";
+                }
             }
             values = values[0..$ - 1];
             return `INSERT INTO ` ~ table.render() ~ `(` ~ fields ~ `)`~` VALUES (` ~ values ~ `)`;
         } else {
-            throw new Exception("No fields provided to INSERT INTO");
+            throw new Exception( "No fields provided to INSERT INTO");
         }
     }
 
     InsertStatement into(Expression table) {
+        this.table = table;
+        return this;
+    }
+}
+
+class InsertOrReplaceStatement: Statement {
+    Setter[] setters;
+    Expression table;
+
+    this(Setter[] _setters) {
+        setters = _setters;
+    }
+    override string asSQL() {
+        import std.array: replace;
+        import std.stdio;
+        import std.string: isNumeric;
+        auto fields = "";
+        foreach (setter; setters) {
+            fields ~= setter.field.render() ~ ",";
+        }
+        if (fields.length > 0) {
+            fields = fields[0..$ - 1];
+            auto values = "";
+            foreach (setter; setters) {
+                //Adding a check for single quotes
+                if (setter.value.render().length > 1 && !isNumeric(setter.value.render())) {
+                    auto editedSetter = setter.value.render()[1..$ - 1].replace( `'`, `''`);
+                    //writeln( `Edited Setter: ` ~ editedSetter);
+                    values ~= `'` ~ editedSetter ~ "',";
+                } else {
+                    auto originalValue = setter.value.render();
+                    //writeln(`Unedited Setter: ` ~ originalValue);
+                    values ~= `'` ~ originalValue ~ "',";
+                }
+            }
+            values = values[0..$ - 1];
+            return `INSERT OR REPLACE INTO ` ~ table.render() ~ `(` ~ fields ~ `)`~` VALUES (` ~ values ~ `)`;
+        } else {
+            throw new Exception( "No fields provided to INSERT INTO");
+        }
+    }
+
+    InsertOrReplaceStatement into(Expression table) {
         this.table = table;
         return this;
     }
@@ -406,7 +513,7 @@ class Table : Expression {
 
     Statement create(void function(TableBuilder builder) lambda)  {
         auto builder = new TableBuilder( this);
-        lambda(builder);
+        lambda( builder);
         return new CreateStatement( builder);
     }
 
@@ -418,13 +525,19 @@ class Table : Expression {
         return new SelectStatement( new Star()).from( this);
     }
 
-    InsertStatement insert(void function(Setters builder) lambda) {
+    InsertStatement insert(void delegate(Setters builder) lambda) {
         auto builder = new Setters();
-        lambda(builder);
+        lambda( builder);
         return new InsertStatement( builder.setters).into( this);
     }
 
-    UpdateStatement update(void function(Setters builder) lambda) {
+    InsertOrReplaceStatement insertOrReplace(void delegate(Setters builder) lambda) {
+        auto builder = new Setters();
+        lambda( builder);
+        return new InsertOrReplaceStatement( builder.setters).into( this);
+    }
+
+    UpdateStatement update(void delegate(Setters builder) lambda) {
         auto builder = new Setters();
         lambda( builder);
         return new UpdateStatement( builder.setters).table( this);
@@ -432,6 +545,10 @@ class Table : Expression {
 
     DeleteStatement deleteStatement() {
         return new DeleteStatement().from( this);
+    }
+
+    DropStatement drop() {
+        return new DropStatement( this);
     }
 
     Statement exists() {
@@ -462,7 +579,7 @@ class TableBuilder {
     }
 
     ColumnDefinition column(T)(Column!T column, bool primaryKey = false, bool unique = false, bool autoincrement = false) {
-        auto c = new ColumnDefinition( column, column.type, primaryKey, unique, autoincrement, !column.isNullable);
+        auto c = new ColumnDefinition( column, column.type, primaryKey, unique, autoincrement, !column.is_nullable);
         columns ~= c;
         return c;
     }
@@ -492,13 +609,18 @@ class ColumnDefinition : Expression {
             pk = " PRIMARY KEY";
         auto nn = "";
         if (notNull)
-            pk =" NOT NULL";
+            nn =" NOT NULL";
         auto un = "";
         if (unique)
             un = " UNIQUE";
         auto ai = "";
         if (autoincrement)
             ai = " AUTOINCREMENT";
+        if (type == ColumnType.INTEGER) {
+            if (pk && ai) {
+                return `` ~ name.render() ~ ` ` ~ to!string( type) ~ pk ~ un ~ nn;
+            }
+        }
         return `` ~ name.render() ~ ` ` ~ to!string( type) ~ pk ~ un ~ai ~ nn;
     }
 }
