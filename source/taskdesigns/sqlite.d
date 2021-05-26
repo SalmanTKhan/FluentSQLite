@@ -61,6 +61,7 @@ class ScalarExpression(T) : Expression {
         } else if (is(T == float)) {
             return to!string( value);
         } else if (is(T == byte[])) {
+            // TODO Fix byte array to string
             return "";
             //return "X'" ~ (cast(immutable(char)*)value)[0..value.length] ~ "'";
         } else if (is(T == string)) {
@@ -173,7 +174,7 @@ class PatternPredicate : Predicate {
     }
 
     override string render()  {
-        return `(` ~ left.render() ~ ` LIKE ` ~ right.render() ~ ``;
+        return `( ` ~ left.render() ~ ` LIKE ` ~ quotedIdentifier(right.render()) ~ ` )`;
     }
 }
 
@@ -377,7 +378,7 @@ class InsertStatement: Statement {
                 //Adding a check for single quotes
                 if (setter.value.render().length > 1) {
                     import std.string: indexOf;
-                    if (setter.value.render()[1..$ - 1].indexOf(`'`) != -1) {
+                    if (setter.value.render()[1..$ - 1].indexOf( `'`) != -1) {
                         auto editedSetter = setter.value.render()[1..$ - 1].replace( `'`, `''`);
                         values ~= `'` ~ editedSetter ~ "',";
                     } else {
@@ -420,7 +421,7 @@ class InsertOrReplaceStatement: Statement {
             auto values = "";
             foreach (setter; setters) {
                 //Adding a check for single quotes
-                if (setter.value.render().length > 1 && !isNumeric(setter.value.render())) {
+                if (setter.value.render().length > 1 && !isNumeric( setter.value.render())) {
                     auto editedSetter = setter.value.render()[1..$ - 1].replace( `'`, `''`);
                     //writeln( `Edited Setter: ` ~ editedSetter);
                     values ~= `'` ~ editedSetter ~ "',";
@@ -521,6 +522,10 @@ class Table : Expression {
         return new SelectStatement( * column).from( this);
     }
 
+    SelectStatement count() {
+        return new SelectStatement( new SQLiteFunction( "count", new Star())).from( this);
+    }
+
     SelectStatement select() {
         return new SelectStatement( new Star()).from( this);
     }
@@ -582,6 +587,32 @@ class TableBuilder {
         auto c = new ColumnDefinition( column, column.type, primaryKey, unique, autoincrement, !column.is_nullable);
         columns ~= c;
         return c;
+    }
+}
+
+class TransactionStatement: Statement {
+    Statement[] statements;
+    string transactions = "";
+
+    TransactionStatement add(Statement statement) {
+        statements ~= statement;
+        return this;
+    }
+
+    TransactionStatement add(string statementAsSQL) {
+        import std.stdio;
+        //writeln(`Statement added: ` ~ statementAsSQL ~ `;\n`);
+        transactions ~= statementAsSQL ~ `;\n`;
+        return this;
+    }
+
+    override string asSQL() {
+        string transactionStart = `COMMIT; BEGIN TRANSACTION;\n`;
+        string transactionEnd = `COMMIT;`;
+        foreach(statement; statements) {
+            transactions ~= `\n` ~ statement.asSQL() ~ `;\n`;
+        }
+        return transactionStart ~ transactions ~ transactionEnd;
     }
 }
 
