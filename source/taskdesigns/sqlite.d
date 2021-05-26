@@ -518,8 +518,8 @@ class Table : Expression {
         return new CreateStatement( builder);
     }
 
-    SelectStatement select(T)(T column) {
-        return new SelectStatement( * column).from( this);
+    SelectStatement select(Expression[] expressions...) {
+        return new SelectStatement(expressions).from( this);
     }
 
     SelectStatement count() {
