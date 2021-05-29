@@ -30,3 +30,4 @@ fluentsqlite.dll
 fluentsqlite.a
 fluentsqlite.lib
 fluentsqlite-test-*
+*.bak

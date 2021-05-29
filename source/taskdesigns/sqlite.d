@@ -1,11 +1,10 @@
 module taskdesigns.sqlite;
-
-T instanceof(T)(Object o) if (is(T == class)) {
-    return cast(T) o;
-}
+import std.conv;
+import std.regex;
+import std.array;
+import std.algorithm;
 
 string escapedString(T)(T original, string escapeCharacter = `'`) {
-    import std.conv, std.regex;
     /+
     if (cast(string)original) {
         auto re = regex( r"[\\\\"~ escapeCharacter ~"]");
@@ -16,7 +15,6 @@ string escapedString(T)(T original, string escapeCharacter = `'`) {
 }
 
 string quotedIdentifier(string value) {
-    import std.array: replace;
     string ret = "";
     if (auto castedValue = cast(string)value) {
         ret = castedValue.replace( "\"", "\"\"");
@@ -46,7 +44,6 @@ class ScalarExpression(T) : Expression {
         Overriden render from Expression interface
     ++/
     override string render() {
-        import std.conv;
         if (is(T == int)) {
             return to!string( value);
         } else if (is(T == long)) {
@@ -72,6 +69,9 @@ class ScalarExpression(T) : Expression {
     }
 }
 
+/++
+SQLite Function
+++/
 class SQLiteFunction: Expression {
     string name;
     Expression[] arguments;
@@ -84,7 +84,6 @@ class SQLiteFunction: Expression {
         arguments = _arguments;
     }
     override string render() {
-        import std.algorithm, std.array, std.conv;
         auto argumentString = "";
         foreach (argument; arguments) {
             argumentString ~= argument.render() ~ `,`;
@@ -94,6 +93,10 @@ class SQLiteFunction: Expression {
     }
 }
 
+/++
+Pattern Expression
+Expression with pattern matching using wildcards % added as a prefix and/or suffix.
+++/
 class PatternExpression(T) : Expression {
     import std.variant;
     bool prefix;
@@ -116,6 +119,10 @@ class PatternExpression(T) : Expression {
 
 }
 
+/++
+Star Expression
+ Expression using the * symbol to denote all columns.
+++/
 class Star : Expression {
     override string render() {
         return "*";
@@ -160,7 +167,19 @@ class EqualityPredicate : Predicate {
     }
 
     override string render(){
-        return `(`~ left.render() ~ `=`~ right.render() ~`)`;
+        return `( `~ left.render() ~ ` = `~ right.render() ~` )`;
+    }
+}
+
+class NullPredicate : Predicate {
+    Expression left;
+
+    this(Expression _left) {
+        left = _left;
+    }
+
+    override string render(){
+        return `( `~ left.render() ~ ` is null )`;
     }
 }
 
@@ -174,7 +193,7 @@ class PatternPredicate : Predicate {
     }
 
     override string render()  {
-        return `( ` ~ left.render() ~ ` LIKE ` ~ quotedIdentifier(right.render()) ~ ` )`;
+        return `( ` ~ left.render() ~ ` LIKE ` ~ quotedIdentifier( right.render()) ~ ` )`;
     }
 }
 
@@ -186,7 +205,7 @@ class ConjunctionPredicate : Predicate {
         p2 = _p2;
     }
     override string render() {
-        return `(` ~ p1.render() ~ `) AND (` ~ p2.render() ~ `)`;
+        return `( ` ~ p1.render() ~ ` ) AND ( ` ~ p2.render() ~ ` )`;
     }
 }
 
@@ -237,6 +256,9 @@ class Column(T): Expression {
     Predicate endsWith(T value) {
         return new PatternPredicate( this, new PatternExpression!T( true, false, value));
     }
+    Predicate isNull() {
+        return new NullPredicate( this);
+    }
     override string render() {
         return quotedIdentifier( name);
     }
@@ -275,15 +297,25 @@ class Setters {
     }
 }
 
+/++
+Statement Interface
+Contains a method which returns a string representation of the SQL statement;
+++/
 interface Statement {
     string asSQL();
 }
 
+/++
+Select Statement
+++/
 class SelectStatement: Statement {
     Expression[] expressions;
     Expression table = null;
     Predicate predicate = null;
     Sort[] orders;
+    string fields = "";
+    int limit = 0;
+    int offset = 0;
 
     this(Expression _expression) {
         expressions ~= _expression;
@@ -291,6 +323,12 @@ class SelectStatement: Statement {
 
     this(Expression[] _expressions) {
         expressions = _expressions;
+    }
+
+    this(string[] _fields...) {
+        foreach (field; _fields) {
+            fields ~= field~ ",";
+        }
     }
 
     SelectStatement from(Expression table) {
@@ -303,13 +341,18 @@ class SelectStatement: Statement {
         return this;
     }
 
-    SelectStatement order_by(Sort _sort) {
+    SelectStatement orderBy(Sort _sort) {
         this.orders ~= _sort;
         return this;
     }
 
+    SelectStatement limitOffset(int _limit, int _offset = 0) {
+        this.limit = _limit;
+        this.offset = _offset;
+        return this;
+    }
+
     override string asSQL() {
-        auto fields = "";
         foreach (expression; expressions)
             fields ~= expression.render() ~ ",";
         fields = fields[0..$-1];
@@ -325,7 +368,15 @@ class SelectStatement: Statement {
                 order ~= expression.render() ~ ",";
             order = ` ORDER BY ` ~ order;
         }
-        return `SELECT ` ~ fields ~ from ~ where ~ order;
+        auto limits = "";
+        if (limit > 0) {
+            limits = ` LIMIT ` ~ to!string(limit);
+        }
+        auto offsets = "";
+        if (offset > 0) {
+            offsets = ` OFFSET ` ~ to!string(offset);
+        }
+        return `SELECT ` ~ fields ~ from ~ where ~ order ~ limits ~ offsets;
     }
 }
 
@@ -519,7 +570,7 @@ class Table : Expression {
     }
 
     SelectStatement select(Expression[] expressions...) {
-        return new SelectStatement(expressions).from( this);
+        return new SelectStatement( expressions).from( this);
     }
 
     SelectStatement count() {
@@ -609,7 +660,7 @@ class TransactionStatement: Statement {
     override string asSQL() {
         string transactionStart = `COMMIT; BEGIN TRANSACTION;\n`;
         string transactionEnd = `COMMIT;`;
-        foreach(statement; statements) {
+        foreach (statement; statements) {
             transactions ~= `\n` ~ statement.asSQL() ~ `;\n`;
         }
         return transactionStart ~ transactions ~ transactionEnd;
